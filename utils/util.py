@@ -1,8 +1,50 @@
 import cv2
 import numpy as np
 from math import ceil
-from matplotlib import pyplot as plt
+import matplotlib.pyplot as plt
+from matplotlib.patches import Circle
 
+def otsus_thresholding(image):
+    """
+    Apply Otsu's thresholding to the input image.
+    Parameters:
+    - image: Input image as a 2D numpy array.
+    Returns:
+    - Binary mask as a 2D numpy array.
+    """
+    # Calculate histogram [np.arange(257) ranges from 0 to 256]
+    histogram, _ = np.histogram(image, bins=np.arange(257), density=True)
+
+    cumulative_sum = np.cumsum(histogram)
+    cumulative_mean = np.cumsum(histogram * np.arange(256))
+
+    global_intensity_mean = cumulative_mean[-1]
+    max_variance = 0
+    optimal_threshold = 0
+
+    # Iterate through all possible thresholds
+    for t in range(256):
+        prob_background, prob_foreground = cumulative_sum[t], 1 - cumulative_sum[t]
+        mean_background, mean_foreground = (
+            cumulative_mean[t] / cumulative_sum[t],
+            (
+                (global_intensity_mean - cumulative_mean[t]) / (1 - cumulative_sum[t])
+                if (1 - cumulative_sum[t]) > 0
+                else 0
+            ),
+        )
+        variance_between = (
+            prob_background * prob_foreground * (mean_background - mean_foreground) ** 2
+        )
+
+        if variance_between > max_variance:
+            max_variance = variance_between
+            optimal_threshold = t
+
+    # Create binary mask
+    binary_mask = np.where(image > optimal_threshold, 1, 0).astype(np.uint8)
+
+    return binary_mask, optimal_threshold
 
 def interpolate(edge_magnitude, x, y, angle):
     """
@@ -74,203 +116,101 @@ def myEdgeFilter(img0, sigma):
         img0: The input image
         sigma: The standard deviation of the Gaussian filter
     Returns:
-        edge_magnitude: The edge magnitude image
-        edge_orientation: The edge orientation image
+        edge_magnitude: The edge magnitude image edge_orientation: The edge orientation image
     """
-    # Determine size of the Gaussian filter
     hsize = int(2 * ceil(3 * sigma) + 1)
 
-    # Apply Gaussian blur to smooth the image
     smooth_img = cv2.GaussianBlur(img0, (hsize, hsize), sigma)
 
-    # Use Sobel operators to find x and y gradients
     grad_x = cv2.Sobel(smooth_img, cv2.CV_64F, 1, 0, ksize=3)
     grad_y = cv2.Sobel(smooth_img, cv2.CV_64F, 0, 1, ksize=3)
 
-    # Compute the edge magnitude
     edge_magnitude = np.sqrt(grad_x**2 + grad_y**2)
 
-    # Compute the edge orientation (in radians)
     edge_orientation = np.arctan2(grad_y, grad_x)
 
     return edge_magnitude, edge_orientation
 
+def hough_circle_detect(nms_edge_magnitude, edge_orientation, img_shape, radius_range,radius_step=1):
+    """
+    Detect circles in an image using the Hough transform.
+    Parameters:
+        nms_edge_magnitude: The non-maximum suppressed edge magnitude image
+        edge_orientation: The edge orientation image
+        img_shape: The shape of the original image
+        radius_range: The range of radii to search for
+        radius_step: The step size for the radius search
+    Returns:
+        circles: A tuple of arrays (x_indices, y_indices, radius_indices)
+        accumulator: The Hough accumulator array of shape (img_shape[0], img_shape[1], len(radius_range))
+    """
+    # Initialize the accumulator (3D, for the x, y center positions and the radius)
+    accumulator = np.zeros((img_shape[0], img_shape[1], len(radius_range)))
+    radii = np.arange(radius_range[0], radius_range[1] + 1, radius_step)
 
-##def find_circles(image, radius, region=5):
-#    (m, n) = image.shape
-#    min_radius, max_radius = radius
-#    acc_array = np.zeros(
-#        (max_radius - min_radius + 1, m + 2 * max_radius, n + 2 * max_radius)
-#    )
-#    edge_locs = np.argwhere(image[:, :])
-#    theta = np.arange(0, 360, 1) * np.pi / 180
-#
-#    for r in range(min_radius, max_radius + 1):
-#        circle = np.zeros((2 * (r + 1), 2 * (r + 1)))
-#        center_x, center_y = r + 1, r + 1
-#
-#        for t in theta:
-#            x = np.round(r * np.cos(t)).astype(int)
-#            y = np.round(r * np.sin(t)).astype(int)
-#            circle[center_x + x, center_y + y] = 1
-#
-#        for x, y in edge_locs:
-#            x_start = max(0, x - center_x + max_radius)
-#            x_end = min(m + 2 * max_radius, x + center_x + max_radius + 1)
-#            y_start = max(0, y - center_y + max_radius)
-#            y_end = min(n + 2 * max_radius, y + center_y + max_radius + 1)
-#            acc_array[r - min_radius, x_start:x_end, y_start:y_end] += circle[
-#                max(0, center_x - x) : min(2 * (r + 1), center_x - x + x_end - x_start),
-#                max(0, center_y - y) : min(2 * (r + 1), center_y - y + y_end - y_start),
-#            ]
-#
-#    output_array = np.zeros((max_radius - min_radius + 1, m, n))
-#    for r, x, y in np.argwhere(acc_array):
-#        temp = acc_array[
-#            max(0, r - region) : min(max_radius - min_radius + 1, r + region + 1),
-#            max(0, x - region) : min(m + 2 * max_radius, x + region + 1),
-#            max(0, y - region) : min(n + 2 * max_radius, y + region + 1),
-#        ]
-#        p, a, b = np.unravel_index(np.argmax(temp), temp.shape)
-#        output_array[r, x + a - region - max_radius, y + b - region - max_radius] = 1
-#
-#    return output_array
-##def find_circles(image, radius, region=5, threshold=None):
-#    (m, n) = image.shape
-#    min_radius, max_radius = radius
-#    acc_array = np.zeros(
-#        (max_radius - min_radius + 1, m + 2 * max_radius, n + 2 * max_radius)
-#    )
-#    edge_locs = np.argwhere(image[:, :])
-#    theta = np.arange(0, 360, 1) * np.pi / 180
-#
-#    for r in range(min_radius, max_radius + 1):
-#        circle = np.zeros((2 * (r + 1), 2 * (r + 1)))
-#        center_x, center_y = r + 1, r + 1
-#
-#        for t in theta:
-#            x = np.round(r * np.cos(t)).astype(int)
-#            y = np.round(r * np.sin(t)).astype(int)
-#            circle[center_x + x, center_y + y] = 1
-#
-#        for x, y in edge_locs:
-#            x_start = max(0, x - center_x + max_radius)
-#            x_end = min(m + 2 * max_radius, x + center_x + max_radius)
-#            y_start = max(0, y - center_y + max_radius)
-#            y_end = min(n + 2 * max_radius, y + center_y + max_radius)
-#            acc_array[r - min_radius, x_start:x_end, y_start:y_end] += circle
-#
-#    if threshold is not None:
-#        acc_array[acc_array < threshold] = 0
-#
-#    output_array = np.zeros((max_radius - min_radius + 1, m, n))
-#    for r in range(max_radius - min_radius + 1):
-#        for x in range(m):
-#            for y in range(n):
-#                if acc_array[r, x + max_radius, y + max_radius] > 0:
-#                    temp = acc_array[
-#                        max(0, r - region) : min(
-#                            max_radius - min_radius + 1, r + region + 1
-#                        ),
-#                        max(0, x + max_radius - region) : min(
-#                            m + 2 * max_radius, x + max_radius + region + 1
-#                        ),
-#                        max(0, y + max_radius - region) : min(
-#                            n + 2 * max_radius, y + max_radius + region + 1
-#                        ),
-#                    ]
-#                    _, a, b = np.unravel_index(np.argmax(temp), temp.shape)
-#                    output_array[r, x, y] = 1 if a == region and b == region else 0
-#
-#    return output_array
-def detectCircles(img, threshold, region, radius=None):
-    (M, N) = img.shape
-    if radius == None:
-        R_max = np.max((M, N))
-        R_min = 3
+    # Iterate over the edge pixels
+    for y in range(img_shape[0]):
+        for x in range(img_shape[1]):
+            if nms_edge_magnitude[y, x] != 0:
+                # For each radius
+                for r_idx, r in enumerate(radii):
+                    # Calculate possible centers based on the gradient direction
+                    for sign in (-1, 1):
+                        a = int(y - sign * r * np.sin(edge_orientation[y, x]))
+                        b = int(x - sign * r * np.cos(edge_orientation[y, x]))
+                        # Check if the center is within bounds
+                        if a >= 0 and a < img_shape[0] and b >= 0 and b < img_shape[1]:
+                            accumulator[a, b, r_idx] += 1
+
+    # Threshold to find centers with enough votes
+    circles = np.where(accumulator > np.max(accumulator) * 0.40)
+
+    return circles, accumulator
+
+def display_voting_lines(thresholded_nms, edge_orientation, img, radius=15):
+    """
+    Display the voting lines for a given radius based on edge pixels and their orientations.
+
+    Parameters:
+    - thresholded_nms: The thesholded nms magnitude response.
+    - edge_orientation: The edge orientation image (in radians).
+    - img: The original image for background display.
+    - radius: The radius for which to visualize the voting process.
+    """
+    _, ax = plt.subplots()
+    if img.ndim == 2:
+        ax.imshow(img, cmap='gray')
     else:
-        [R_max, R_min] = radius
+        ax.imshow(img)
 
-    R = R_max - R_min
-    # Initializing accumulator array.
-    # Accumulator array is a 3 dimensional array with the dimensions representing
-    # the radius, X coordinate and Y coordinate resectively.
-    # Also appending a padding of 2 times R_max to overcome the problems of overflow
-    A = np.zeros((R_max, M + 2 * R_max, N + 2 * R_max))
-    B = np.zeros((R_max, M + 2 * R_max, N + 2 * R_max))
+    # Threshold edge magnitude to identify edge pixels (simple binary thresholding for demonstration)
+    #edge_pixels = np.where(thresholded_nms > np.percentile(thresholded_nms, 90))  # Adjust threshold as needed
+    edge_pixels = np.where(thresholded_nms)
 
-    # Precomputing all angles to increase the speed of the algorithm
-    theta = np.arange(0, 360) * np.pi / 180
-    edges = np.argwhere(img[:, :])  # Extracting all edge coordinates
-    for val in range(R):
-        r = R_min + val
-        # Creating a Circle Blueprint
-        bprint = np.zeros((2 * (r + 1), 2 * (r + 1)))
-        (m, n) = (r + 1, r + 1)  # Finding out the center of the blueprint
-        for angle in theta:
-            x = int(np.round(r * np.cos(angle)))
-            y = int(np.round(r * np.sin(angle)))
-            bprint[m + x, n + y] = 1
-        constant = np.argwhere(bprint).shape[0]
-        for x, y in edges:  # For each edge coordinates
-            # Centering the blueprint circle over the edges
-            # and updating the accumulator array
-            X = [x - m + R_max, x + m + R_max]  # Computing the extreme X values
-            Y = [y - n + R_max, y + n + R_max]  # Computing the extreme Y values
-            A[r, X[0] : X[1], Y[0] : Y[1]] += bprint
-        A[r][A[r] < threshold * constant / r] = 0
+    for y, x in zip(*edge_pixels):
+        orientation = edge_orientation[y, x]
 
-    for r, x, y in np.argwhere(A):
-        temp = A[
-            r - region : r + region, x - region : x + region, y - region : y + region
-        ]
-        try:
-            p, a, b = np.unravel_index(np.argmax(temp), temp.shape)
-        except:
-            continue
-        B[r + (p - region), x + (a - region), y + (b - region)] = 1
+        # Calculate the end points of the voting line in both directions
+        dx1 = radius * np.cos(orientation)
+        dy1 = radius * np.sin(orientation)
+        dx2 = -dx1  # Opposite direction
+        dy2 = -dy1
 
-    return B[:, R_max:-R_max, R_max:-R_max]
+        # Draw arrows to represent voting lines
+        ax.arrow(x, y, dx1, dy1, color='yellow', head_width=2, head_length=3, alpha=0.5)
+        ax.arrow(x, y, dx2, dy2, color='yellow', head_width=2, head_length=3, alpha=0.5)
 
+    plt.show()
 
-def display_voting_space(acc_array, radius):
-    min_radius, max_radius = radius
-    num_radii = max_radius - min_radius + 1
+def display_circles(circles, img, radius_range):
+    _, ax = plt.subplots()
+    ax.imshow(img)
 
-    fig, axes = plt.subplots(1, num_radii, figsize=(20, 5))
+    # circles is a tuple of arrays (x_indices, y_indices, radius_indices)
+    # We need to iterate through them together
+    for x, y, r_idx in zip(*circles):
+        r = radius_range[r_idx]  # Map radius index back to radius value
+        circ = Circle((y, x), r, edgecolor=(1, 0, 0), facecolor='none')  # Create circle patch
+        ax.add_patch(circ)  # Add the circle patch to the axes
 
-    for r in range(num_radii):
-        axes[r].imshow(acc_array[r], cmap="gray")
-        axes[r].set_title(f"Radius {r + min_radius}")
-        axes[r].axis("off")
-
-    plt.tight_layout()
-
-
-# def display_detected_circles(image, output_array, radius):
-#   min_radius, max_radius = radius
-#   num_radii = max_radius - min_radius + 1
-#
-#   fig, ax = plt.subplots(figsize=(10, 10))
-#   ax.imshow(image, cmap='gray')
-#
-#   for r in range(num_radii):
-#       for x in range(image.shape[0]):
-#           for y in range(image.shape[1]):
-#               if output_array[r, x, y] == 1:
-#                   circle = plt.Circle((y, x), r + min_radius, color='red', fill=False)
-#                   ax.add_patch(circle)
-#
-#   ax.set_title('Detected Circles')
-#   ax.axis('off')
-#   plt.tight_layout()
-#   plt.show()
-def display_circles(acc_array, img):
-    fig = plt.figure()
-    plt.imshow(img)
-    circleCoordinates = np.argwhere(acc_array)  # Extracting the circle information
-    circle = []
-    for r, x, y in circleCoordinates:
-        circle.append(plt.Circle((y, x), r, color=(1, 0, 0), fill=False))
-        fig.add_subplot(111).add_artist(circle[-1])
     plt.show()
